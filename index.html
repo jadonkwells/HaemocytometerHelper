@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cell Culture Calculator</title>
-  
+  <title>Haemocytometer Helper v1.1</title>
+
+  <!-- External libraries for Excel export with screenshots -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+
   <style>
     * {
       margin: 0;
@@ -40,6 +44,13 @@
     .app-header p {
       font-size: 1.1rem;
       opacity: 0.95;
+    }
+
+    .app-header .version-label {
+      font-size: 0.9rem;
+      opacity: 0.8;
+      margin-bottom: 5px;
+      font-weight: 500;
     }
 
     .container {
@@ -364,7 +375,8 @@
 </head>
 <body>
   <div class="app-header">
-    <h1>🧬 Cell Culture Calculator</h1>
+    <h1>🧬 Haemocytometer Helper</h1>
+    <p class="version-label">Version 1.1</p>
     <p>Professional tool for haemocytometer counting, plate seeding, and cell freezing</p>
   </div>
 
@@ -664,13 +676,18 @@
 
       <!-- Name entry for saved counts -->
       <div class="form-group">
-        <label class="form-label">Count Name</label>
+        <label class="form-label">Experiment Name</label>
+        <input id="experimentName" type="text" class="form-control" placeholder="e.g. 20250101 cell counts">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Sample/Cell Line Name</label>
         <input id="countName" type="text" class="form-control" placeholder="e.g. Cell line A">
       </div>
       
       <div class="button-group">
         <button id="saveCountBtn" class="btn btn-primary">Save Count</button>
-        <button id="downloadCsvBtn" class="btn btn-secondary hidden">Download CSV</button>
+        <button id="downloadCsvBtn" class="btn btn-secondary hidden">Download Excel</button>
         <button id="resetSessionBtn" class="btn btn-warning">New Session</button>
       </div>
       
@@ -678,8 +695,7 @@
         <thead>
           <tr>
             <th>#</th>
-            <th>Name</th>
-            <th>Avg/sq</th>
+            <th>Sample</th>
             <th>Conc</th>
             <th>Cells/well</th>
             <th>Cell Vol</th>
@@ -733,6 +749,27 @@
       };
       const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
       const fmtVol = ml => ml < 1 ? Math.round(ml * 1000) + ' µL' : ml.toFixed(2) + ' mL';
+
+      // Generate default experiment name with today's date in YYYYMMDD format
+      function getDefaultExperimentName() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        return `${year}${month}${day} cell counts`;
+      }
+
+      // Update experiment name with current date if still using default pattern
+      function updateExperimentNameDate() {
+        const input = $('experimentName');
+        if (!input) return;
+
+        // Only update if empty or matches the default pattern (YYYYMMDD cell counts)
+        const defaultPattern = /^\d{8} cell counts$/;
+        if (input.value === '' || defaultPattern.test(input.value)) {
+          input.value = getDefaultExperimentName();
+        }
+      }
 
       // UI Management
       function updateVisibility() {
@@ -1128,22 +1165,61 @@
 
       // Data management
       function saveCount() {
-        // Build a row object from current outputs and the provided name
+        const measurementMode = $('measurementMode')?.value || 'haem';
+        const seedingMode = $('mode')?.value || 'cells';
+        const wellMode = $('wellMode')?.value || 'manual';
+        const plate = $('plate')?.value || '96';
+
+        // Build a comprehensive row object from all inputs and outputs
         const row = {
-          name: $('countName')?.value || '',
-          avg: $('outAvgSq')?.value || '',
-          conc: $('outConc')?.value || '',
+          // Identification
+          experimentName: $('experimentName')?.value || getDefaultExperimentName(),
+          sampleName: $('countName')?.value || '',
+          timestamp: new Date().toLocaleString(),
+
+          // Measurement inputs
+          measurementMode: measurementMode,
+          totalCount: measurementMode === 'haem' ? ($('totalCount')?.value || '') : '',
+          squares: measurementMode === 'haem' ? ($('squares')?.value || '') : '',
+          dilutionFactor: measurementMode === 'haem' ? ($('dilution')?.value || '') : '',
+          knownStockConc: measurementMode === 'stock' ? ($('knownStockConc')?.value || '') : '',
+
+          // Plate setup inputs
+          plateType: plate + '-well',
+          seedingMode: seedingMode,
+          targetCells: seedingMode === 'cells' ? ($('targetCells')?.value || '') : '',
+          targetConfluence: seedingMode === 'conf' ? ($('targetConf')?.value || '') : '',
+          baseline: seedingMode === 'conf' ? ($('baseline')?.value || '') : '',
+          wellMode: wellMode,
+          numWells: wellMode === 'manual' ? ($('numWells')?.value || '') : '',
+          numManualPlates: wellMode === 'manual' ? ($('numManualPlates')?.value || '') : '',
+          numPlates: wellMode === 'plates' ? ($('numPlates')?.value || '') : '',
+          pbsBorder: wellMode === 'plates' ? ($('pbsBorder')?.value || '') : '',
+          numCols: wellMode === 'grid' ? ($('numCols')?.value || '') : '',
+          numRows: wellMode === 'grid' ? ($('numRows')?.value || '') : '',
+          numGridPlates: wellMode === 'grid' ? ($('numGridPlates')?.value || '') : '',
+          mediaPerWell: $('mediaPerWell')?.value || '',
+          overage: $('overage')?.value || '',
+          optimiseFor: $('optimise')?.value || '',
+
+          // Results/outputs
+          avgPerSquare: $('outAvgSq')?.value || '',
+          concentration: $('outConc')?.value || '',
+          wellsToSeed: $('outWells')?.value || '',
           cellsPerWell: $('outCellsPerWell')?.value || '',
-          origVol: $('outOrigVol')?.value || '',
-          mediaVol: $('outMediaVol')?.value || '',
-          finalVol: $('outMixTotal')?.value || ''
+          totalCellsNeeded: $('outTotalCells')?.value || '',
+          totalCellsWithExtra: $('outOverCells')?.value || '',
+          requiredConc: $('outReqConc')?.value || '',
+          finalVolume: $('outMixTotal')?.value || '',
+          cellSuspensionVol: $('outOrigVol')?.value || '',
+          mediaVolume: $('outMediaVol')?.value || ''
         };
-        
+
         window.countsList.push(row);
-        // Clear the name field after saving
+        // Clear the sample name field after saving (keep experiment name)
         const nameInput = $('countName');
         if (nameInput) nameInput.value = '';
-        
+
         renderTable();
         saveState();
       }
@@ -1151,7 +1227,7 @@
       function renderTable() {
         const tbody = $('countsTableBody');
         if (!tbody) return;
-        
+
         tbody.innerHTML = '';
         window.countsList.forEach((r, i) => {
           const tr = document.createElement('tr');
@@ -1174,8 +1250,14 @@
           indexTd.appendChild(indexSpan);
           indexTd.appendChild(delBtn);
           tr.appendChild(indexTd);
-          // Populate remaining cells: name and values (omit final volume)
-          const values = [r.name || '', r.avg, r.conc, r.cellsPerWell, r.origVol, r.mediaVol];
+          // Populate remaining cells with summary data
+          const values = [
+            r.sampleName || r.name || '',  // Support both old and new format
+            r.concentration || r.conc || '',
+            r.cellsPerWell || '',
+            r.cellSuspensionVol || r.origVol || '',
+            r.mediaVolume || r.mediaVol || ''
+          ];
           values.forEach(v => {
             const td = document.createElement('td');
             td.textContent = v || '';
@@ -1183,26 +1265,289 @@
           });
           tbody.appendChild(tr);
         });
-        
+
         $('countsTable')?.classList.toggle('hidden', window.countsList.length === 0);
         $('downloadCsvBtn')?.classList.toggle('hidden', window.countsList.length === 0);
       }
 
-      function downloadCsv() {
+      // Field labels for export (human-readable names)
+      const FIELD_LABELS = {
+        experimentName: 'Experiment Name',
+        sampleName: 'Sample/Cell Line Name',
+        timestamp: 'Timestamp',
+        measurementMode: 'Measurement Mode',
+        totalCount: 'Total Cell Count',
+        squares: 'Squares Counted',
+        dilutionFactor: 'Dilution Factor',
+        knownStockConc: 'Known Stock Concentration',
+        plateType: 'Plate Type',
+        seedingMode: 'Seeding Mode',
+        targetCells: 'Target Cells/Well',
+        targetConfluence: 'Target % Confluence',
+        baseline: 'Cells at 100% Confluence',
+        wellMode: 'Well Calculation Method',
+        numWells: 'Number of Wells',
+        numManualPlates: 'Replicate Plates (Manual)',
+        numPlates: 'Number of Plates',
+        pbsBorder: 'PBS Border',
+        numCols: 'Columns',
+        numRows: 'Rows',
+        numGridPlates: 'Replicate Plates (Grid)',
+        mediaPerWell: 'Volume per Well',
+        overage: 'Extra Volume (%)',
+        optimiseFor: 'Optimise For',
+        avgPerSquare: 'Avg Cells/Square',
+        concentration: 'Stock Concentration',
+        wellsToSeed: 'Wells to Seed',
+        cellsPerWell: 'Cells per Well',
+        totalCellsNeeded: 'Total Cells Needed',
+        totalCellsWithExtra: 'Total Cells (with Extra)',
+        requiredConc: 'Required Concentration',
+        finalVolume: 'Final Volume',
+        cellSuspensionVol: 'Cell Suspension Volume',
+        mediaVolume: 'Media Volume'
+      };
+
+      // Fields to include in export (in order)
+      const EXPORT_FIELDS = [
+        'experimentName',
+        'sampleName',
+        'timestamp',
+        'measurementMode',
+        'totalCount',
+        'squares',
+        'dilutionFactor',
+        'knownStockConc',
+        'plateType',
+        'seedingMode',
+        'targetCells',
+        'targetConfluence',
+        'baseline',
+        'wellMode',
+        'numWells',
+        'numManualPlates',
+        'numPlates',
+        'pbsBorder',
+        'numCols',
+        'numRows',
+        'numGridPlates',
+        'mediaPerWell',
+        'overage',
+        'optimiseFor',
+        'avgPerSquare',
+        'concentration',
+        'wellsToSeed',
+        'cellsPerWell',
+        'totalCellsNeeded',
+        'totalCellsWithExtra',
+        'requiredConc',
+        'finalVolume',
+        'cellSuspensionVol',
+        'mediaVolume'
+      ];
+
+      async function downloadExcel() {
         if (!window.countsList.length) return;
-        
-        const headers = ['#', 'Name', 'Avg/sq', 'Conc', 'Cells/well', 'Cell Vol', 'Media Vol', 'Final Vol'];
-        let csv = headers.join(',') + '\n';
-        
-        window.countsList.forEach((r, idx) => {
-          csv += [idx + 1, r.name || '', r.avg, r.conc, r.cellsPerWell, r.origVol, r.mediaVol, r.finalVol].join(',') + '\n';
+
+        // Check if ExcelJS is available
+        if (typeof ExcelJS === 'undefined') {
+          alert('Excel export library not loaded. Please try again or check your internet connection.');
+          return;
+        }
+
+        const btn = $('downloadCsvBtn');
+        const originalText = btn.textContent;
+        btn.textContent = 'Generating...';
+        btn.disabled = true;
+
+        try {
+          // Create workbook
+          const workbook = new ExcelJS.Workbook();
+          workbook.creator = 'Haemocytometer Helper v1.1';
+          workbook.created = new Date();
+
+          // Create Data sheet
+          const dataSheet = workbook.addWorksheet('Cell Count Data');
+
+          // Get experiment name from first record for filename
+          const experimentName = window.countsList[0]?.experimentName || getDefaultExperimentName();
+
+          // Build transposed data: fields as rows, samples as columns
+          // Row 1: Header row with "Field" in A1 and sample numbers in B1, C1, etc.
+          const headerRow = ['Field'];
+          for (let i = 0; i < window.countsList.length; i++) {
+            headerRow.push(`Sample ${i + 1}`);
+          }
+          dataSheet.addRow(headerRow);
+
+          // Style header row
+          const headerRowRef = dataSheet.getRow(1);
+          headerRowRef.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          headerRowRef.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FF667eea' }
+          };
+          headerRowRef.alignment = { horizontal: 'center' };
+
+          // Add data rows (each field becomes a row)
+          EXPORT_FIELDS.forEach((fieldKey) => {
+            const row = [FIELD_LABELS[fieldKey] || fieldKey];
+            window.countsList.forEach((record) => {
+              // Handle both old and new record formats
+              let value = record[fieldKey];
+              // Fallback for old format records
+              if (value === undefined) {
+                if (fieldKey === 'sampleName') value = record.name || '';
+                else if (fieldKey === 'concentration') value = record.conc || '';
+                else if (fieldKey === 'avgPerSquare') value = record.avg || '';
+                else if (fieldKey === 'cellSuspensionVol') value = record.origVol || '';
+                else if (fieldKey === 'mediaVolume') value = record.mediaVol || '';
+                else if (fieldKey === 'finalVolume') value = record.finalVol || '';
+                else value = '';
+              }
+              row.push(value || '');
+            });
+            dataSheet.addRow(row);
+          });
+
+          // Set column widths
+          dataSheet.getColumn(1).width = 30;
+          for (let i = 2; i <= window.countsList.length + 1; i++) {
+            dataSheet.getColumn(i).width = 20;
+          }
+
+          // Alternate row colors for readability
+          for (let i = 2; i <= dataSheet.rowCount; i++) {
+            const row = dataSheet.getRow(i);
+            if (i % 2 === 0) {
+              row.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFF7FAFC' }
+              };
+            }
+          }
+
+          // Add borders to all cells
+          dataSheet.eachRow((row) => {
+            row.eachCell((cell) => {
+              cell.border = {
+                top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+                right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+              };
+            });
+          });
+
+          // Try to capture screenshot and add to a separate sheet
+          if (typeof html2canvas !== 'undefined') {
+            try {
+              const canvas = await html2canvas(document.body, {
+                scale: 1,
+                useCORS: true,
+                allowTaint: true,
+                backgroundColor: '#667eea'
+              });
+
+              // Create screenshot sheet
+              const screenshotSheet = workbook.addWorksheet('Screenshot');
+
+              // Convert canvas to base64
+              const imageData = canvas.toDataURL('image/png').split(',')[1];
+
+              // Add image to workbook
+              const imageId = workbook.addImage({
+                base64: imageData,
+                extension: 'png'
+              });
+
+              // Calculate dimensions (fit to reasonable size)
+              const maxWidth = 800;
+              const scale = Math.min(1, maxWidth / canvas.width);
+              const imgWidth = canvas.width * scale;
+              const imgHeight = canvas.height * scale;
+
+              // Add image to sheet
+              screenshotSheet.addImage(imageId, {
+                tl: { col: 0, row: 0 },
+                ext: { width: imgWidth, height: imgHeight }
+              });
+
+              // Add note
+              screenshotSheet.getCell('A1').value = '';
+            } catch (screenshotError) {
+              console.warn('Could not capture screenshot:', screenshotError);
+            }
+          }
+
+          // Generate and download file
+          const buffer = await workbook.xlsx.writeBuffer();
+          const blob = new Blob([buffer], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          // Use experiment name for filename
+          const safeFilename = experimentName.replace(/[^a-z0-9]/gi, '_');
+          a.download = `${safeFilename}.xlsx`;
+          a.click();
+          URL.revokeObjectURL(url);
+
+        } catch (error) {
+          console.error('Excel export error:', error);
+          alert('Error generating Excel file. Falling back to CSV export.');
+          downloadCsvFallback();
+        } finally {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }
+      }
+
+      // Fallback CSV export if Excel fails
+      function downloadCsvFallback() {
+        if (!window.countsList.length) return;
+
+        // Build CSV with transposed format
+        let csv = '';
+        const experimentName = window.countsList[0]?.experimentName || getDefaultExperimentName();
+
+        // Header row
+        csv += 'Field';
+        for (let i = 0; i < window.countsList.length; i++) {
+          csv += `,Sample ${i + 1}`;
+        }
+        csv += '\n';
+
+        // Data rows
+        EXPORT_FIELDS.forEach((fieldKey) => {
+          csv += `"${FIELD_LABELS[fieldKey] || fieldKey}"`;
+          window.countsList.forEach((record) => {
+            let value = record[fieldKey];
+            if (value === undefined) {
+              if (fieldKey === 'sampleName') value = record.name || '';
+              else if (fieldKey === 'concentration') value = record.conc || '';
+              else if (fieldKey === 'avgPerSquare') value = record.avg || '';
+              else if (fieldKey === 'cellSuspensionVol') value = record.origVol || '';
+              else if (fieldKey === 'mediaVolume') value = record.mediaVol || '';
+              else if (fieldKey === 'finalVolume') value = record.finalVol || '';
+              else value = '';
+            }
+            // Escape commas and quotes in CSV
+            const escaped = String(value || '').replace(/"/g, '""');
+            csv += `,"${escaped}"`;
+          });
+          csv += '\n';
         });
-        
+
         const blob = new Blob([csv], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'cell_counts.csv';
+        const safeFilename = experimentName.replace(/[^a-z0-9]/gi, '_');
+        a.download = `${safeFilename}.csv`;
         a.click();
         URL.revokeObjectURL(url);
       }
@@ -1320,7 +1665,7 @@
         });
         
         $('saveCountBtn')?.addEventListener('click', saveCount);
-        $('downloadCsvBtn')?.addEventListener('click', downloadCsv);
+        $('downloadCsvBtn')?.addEventListener('click', downloadExcel);
         $('resetSessionBtn')?.addEventListener('click', () => {
           localStorage.removeItem(STORAGE_KEY);
           location.reload();
@@ -1331,7 +1676,13 @@
         setDefaultVolume();
         updatePlateConstraints();
         updateFreezingFieldLocking();
+        updateExperimentNameDate();
         recalc();
+
+        // Update experiment name date at midnight (check every minute)
+        setInterval(() => {
+          updateExperimentNameDate();
+        }, 60000);
       }
 
       // Start
