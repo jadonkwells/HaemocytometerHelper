@@ -395,6 +395,13 @@
             <option value="stock">I already know my stock concentration</option>
           </select>
         </div>
+        <div id="countingModeDiv" class="form-group">
+          <label class="form-label">Cell counting mode</label>
+          <select id="countingMode" class="form-control">
+            <option value="total" selected>Total cell count only</option>
+            <option value="liveDead">Live + Dead counts (viability)</option>
+          </select>
+        </div>
         <div class="form-group">
           <label class="form-label">What are you doing today?</label>
           <select id="purposeMode" class="form-control">
@@ -414,11 +421,39 @@
         </h2>
         
         <div id="haemoFields">
-          <div class="form-group">
+          <!-- Total count mode (default) -->
+          <div id="totalCountDiv" class="form-group">
             <label class="form-label">Total Cell Count</label>
             <input id="totalCount" type="number" min="0" class="form-control" placeholder="Enter your count">
           </div>
-          
+
+          <!-- Live + Dead count mode -->
+          <div id="liveDeadDiv" class="hidden">
+            <div class="form-group">
+              <label class="form-label">Live Cell Count</label>
+              <input id="liveCount" type="number" min="0" class="form-control" placeholder="Enter live cell count">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Dead Cell Count</label>
+              <input id="deadCount" type="number" min="0" class="form-control" placeholder="Enter dead cell count">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Total (auto-calculated)</label>
+              <input id="calculatedTotal" type="text" class="form-control readonly" readonly style="background: #f0f0f0;">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Viability</label>
+              <input id="viability" type="text" class="form-control readonly" readonly style="background: #e8f5e9;">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Calculate based on</label>
+              <select id="calcBasedOn" class="form-control">
+                <option value="total" selected>Total Count (Live + Dead)</option>
+                <option value="live">Live Count Only</option>
+              </select>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">Number of Squares Counted</label>
             <select id="squares" class="form-control">
@@ -433,7 +468,7 @@
               <option>9</option>
             </select>
           </div>
-          
+
           <div class="form-group">
             <label class="form-label">Dilution Factor (1:x)</label>
             <input id="dilution" type="number" min="1" step="1" value="5" class="form-control">
@@ -684,6 +719,12 @@
         <label class="form-label">Sample/Cell Line Name</label>
         <input id="countName" type="text" class="form-control" placeholder="e.g. Cell line A">
       </div>
+
+      <!-- Filename preview -->
+      <div class="form-group">
+        <label class="form-label">Export Filename Preview</label>
+        <div id="filenamePreview" style="padding: 10px 14px; background: #f7fafc; border: 2px dashed #e2e8f0; border-radius: 12px; font-family: monospace; color: #4a5568; font-size: 0.95rem;"></div>
+      </div>
       
       <div class="button-group">
         <button id="saveCountBtn" class="btn btn-primary">Save Count</button>
@@ -756,7 +797,7 @@
         const year = now.getFullYear();
         const month = String(now.getMonth() + 1).padStart(2, '0');
         const day = String(now.getDate()).padStart(2, '0');
-        return `${year}${month}${day} cell counts`;
+        return `${year}${month}${day}`;
       }
 
       // Update experiment name with current date if still using default pattern
@@ -764,21 +805,47 @@
         const input = $('experimentName');
         if (!input) return;
 
-        // Only update if empty or matches the default pattern (YYYYMMDD cell counts)
-        const defaultPattern = /^\d{8} cell counts$/;
+        // Only update if empty or matches the default pattern (YYYYMMDD)
+        const defaultPattern = /^\d{8}$/;
         if (input.value === '' || defaultPattern.test(input.value)) {
           input.value = getDefaultExperimentName();
         }
+        updateFilenamePreview();
+      }
+
+      // Generate the export filename from experiment name
+      function getExportFilename() {
+        const experimentName = $('experimentName')?.value || getDefaultExperimentName();
+        return `${experimentName} Cell counts`;
+      }
+
+      // Update the filename preview display
+      function updateFilenamePreview() {
+        const preview = $('filenamePreview');
+        if (!preview) return;
+        const filename = getExportFilename();
+        const safeFilename = filename.replace(/[^a-z0-9 ]/gi, '_');
+        preview.textContent = `${safeFilename}.xlsx`;
       }
 
       // UI Management
       function updateVisibility() {
         const measurementMode = $('measurementMode')?.value || 'haem';
         const purposeMode = $('purposeMode')?.value || 'seeding';
-        
+        const countingMode = $('countingMode')?.value || 'total';
+
         // Measurement mode
         $('haemoFields')?.classList.toggle('hidden', measurementMode !== 'haem');
         $('stockPanel')?.classList.toggle('hidden', measurementMode !== 'stock');
+
+        // Counting mode (only visible for haemocytometer mode)
+        $('countingModeDiv')?.classList.toggle('hidden', measurementMode !== 'haem');
+
+        // Total vs Live+Dead counting fields
+        if (measurementMode === 'haem') {
+          $('totalCountDiv')?.classList.toggle('hidden', countingMode !== 'total');
+          $('liveDeadDiv')?.classList.toggle('hidden', countingMode !== 'liveDead');
+        }
 
         // Purpose mode
         $('seedingCard')?.classList.toggle('hidden', purposeMode !== 'seeding');
@@ -826,33 +893,72 @@
         }
       }
 
+      // Calculate and update live/dead totals and viability
+      function updateLiveDeadCalculations() {
+        const countingMode = $('countingMode')?.value || 'total';
+        if (countingMode !== 'liveDead') return;
+
+        const live = Math.max(0, nz($('liveCount')?.value, 0));
+        const dead = Math.max(0, nz($('deadCount')?.value, 0));
+        const total = live + dead;
+
+        $('calculatedTotal').value = total > 0 ? total.toString() : '';
+
+        if (total > 0) {
+          const viability = (live / total) * 100;
+          $('viability').value = viability.toFixed(1) + '%';
+        } else {
+          $('viability').value = '';
+        }
+      }
+
+      // Get the cell count to use for calculations based on counting mode
+      function getEffectiveCellCount() {
+        const countingMode = $('countingMode')?.value || 'total';
+
+        if (countingMode === 'total') {
+          return Math.max(0, nz($('totalCount')?.value, 0));
+        }
+
+        // Live + Dead mode
+        const live = Math.max(0, nz($('liveCount')?.value, 0));
+        const dead = Math.max(0, nz($('deadCount')?.value, 0));
+        const total = live + dead;
+        const calcBasedOn = $('calcBasedOn')?.value || 'total';
+
+        return calcBasedOn === 'live' ? live : total;
+      }
+
       // Calculations
       function getStockConcentration() {
         if ($('measurementMode')?.value === 'stock') {
           return nz($('knownStockConc')?.value, 0);
         }
-        
-        const total = Math.max(0, nz($('totalCount')?.value, 0));
+
+        const cellCount = getEffectiveCellCount();
         const squares = clamp(nz($('squares')?.value, 4), 1, 9);
         const dil = Math.max(1, nz($('dilution')?.value, 5));
-        const avg = total / squares;
+        const avg = cellCount / squares;
         return avg / 0.0001 * dil;
       }
 
       function calculateHaemocytometer() {
-        const total = Math.max(0, nz($('totalCount')?.value, 0));
+        // Update live/dead calculations first if in that mode
+        updateLiveDeadCalculations();
+
+        const cellCount = getEffectiveCellCount();
         const squares = clamp(nz($('squares')?.value, 4), 1, 9);
         const dil = Math.max(1, nz($('dilution')?.value, 5));
-        const avg = total / squares;
+        const avg = cellCount / squares;
         const cMl = avg / 0.0001 * dil;
-        
+
         if ($('measurementMode')?.value === 'haem') {
           $('outAvgSq').value = avg ? avg.toFixed(2) : '';
         } else {
           $('outAvgSq').value = '';
         }
         $('outConc').value = cMl ? Math.round(cMl).toLocaleString() + ' cells/mL' : '';
-        
+
         return { avg, cMl };
       }
 
@@ -1067,15 +1173,27 @@
       function validate() {
         let valid = true;
         document.querySelectorAll('.invalid').forEach(e => e.classList.remove('invalid'));
-        
+
         const measurementMode = $('measurementMode')?.value || 'haem';
+        const countingMode = $('countingMode')?.value || 'total';
         const purposeMode = $('purposeMode')?.value || 'seeding';
-        
+
         // Check required fields
         const requiredFields = [];
-        
+
         if (measurementMode === 'haem') {
-          requiredFields.push('totalCount', 'squares', 'dilution');
+          if (countingMode === 'total') {
+            requiredFields.push('totalCount');
+          } else {
+            // Live + Dead mode - at least one count is required
+            const live = nz($('liveCount')?.value, 0);
+            const dead = nz($('deadCount')?.value, 0);
+            if (live === 0 && dead === 0) {
+              $('liveCount')?.classList.add('invalid');
+              valid = false;
+            }
+          }
+          requiredFields.push('squares', 'dilution');
         } else {
           requiredFields.push('knownStockConc');
         }
@@ -1166,6 +1284,7 @@
       // Data management
       function saveCount() {
         const measurementMode = $('measurementMode')?.value || 'haem';
+        const countingMode = $('countingMode')?.value || 'total';
         const seedingMode = $('mode')?.value || 'cells';
         const wellMode = $('wellMode')?.value || 'manual';
         const plate = $('plate')?.value || '96';
@@ -1179,7 +1298,12 @@
 
           // Measurement inputs
           measurementMode: measurementMode,
-          totalCount: measurementMode === 'haem' ? ($('totalCount')?.value || '') : '',
+          countingMode: measurementMode === 'haem' ? countingMode : '',
+          totalCount: measurementMode === 'haem' && countingMode === 'total' ? ($('totalCount')?.value || '') : '',
+          liveCount: measurementMode === 'haem' && countingMode === 'liveDead' ? ($('liveCount')?.value || '') : '',
+          deadCount: measurementMode === 'haem' && countingMode === 'liveDead' ? ($('deadCount')?.value || '') : '',
+          viability: measurementMode === 'haem' && countingMode === 'liveDead' ? ($('viability')?.value || '') : '',
+          calcBasedOn: measurementMode === 'haem' && countingMode === 'liveDead' ? ($('calcBasedOn')?.value || '') : '',
           squares: measurementMode === 'haem' ? ($('squares')?.value || '') : '',
           dilutionFactor: measurementMode === 'haem' ? ($('dilution')?.value || '') : '',
           knownStockConc: measurementMode === 'stock' ? ($('knownStockConc')?.value || '') : '',
@@ -1276,7 +1400,12 @@
         sampleName: 'Sample/Cell Line Name',
         timestamp: 'Timestamp',
         measurementMode: 'Measurement Mode',
+        countingMode: 'Counting Mode',
         totalCount: 'Total Cell Count',
+        liveCount: 'Live Cell Count',
+        deadCount: 'Dead Cell Count',
+        viability: 'Viability (%)',
+        calcBasedOn: 'Calculation Based On',
         squares: 'Squares Counted',
         dilutionFactor: 'Dilution Factor',
         knownStockConc: 'Known Stock Concentration',
@@ -1314,7 +1443,12 @@
         'sampleName',
         'timestamp',
         'measurementMode',
+        'countingMode',
         'totalCount',
+        'liveCount',
+        'deadCount',
+        'viability',
+        'calcBasedOn',
         'squares',
         'dilutionFactor',
         'knownStockConc',
@@ -1444,39 +1578,43 @@
           // Try to capture screenshot and add to a separate sheet
           if (typeof html2canvas !== 'undefined') {
             try {
-              const canvas = await html2canvas(document.body, {
-                scale: 1,
-                useCORS: true,
-                allowTaint: true,
-                backgroundColor: '#667eea'
-              });
+              // Capture only the container (not the blue background)
+              const container = document.querySelector('.container');
+              if (container) {
+                const canvas = await html2canvas(container, {
+                  scale: 1.5,
+                  useCORS: true,
+                  allowTaint: true,
+                  backgroundColor: '#ffffff'
+                });
 
-              // Create screenshot sheet
-              const screenshotSheet = workbook.addWorksheet('Screenshot');
+                // Create screenshot sheet
+                const screenshotSheet = workbook.addWorksheet('Screenshot');
 
-              // Convert canvas to base64
-              const imageData = canvas.toDataURL('image/png').split(',')[1];
+                // Convert canvas to base64
+                const imageData = canvas.toDataURL('image/png').split(',')[1];
 
-              // Add image to workbook
-              const imageId = workbook.addImage({
-                base64: imageData,
-                extension: 'png'
-              });
+                // Add image to workbook
+                const imageId = workbook.addImage({
+                  base64: imageData,
+                  extension: 'png'
+                });
 
-              // Calculate dimensions (fit to reasonable size)
-              const maxWidth = 800;
-              const scale = Math.min(1, maxWidth / canvas.width);
-              const imgWidth = canvas.width * scale;
-              const imgHeight = canvas.height * scale;
+                // Calculate dimensions (fit to reasonable size)
+                const maxWidth = 800;
+                const scale = Math.min(1, maxWidth / canvas.width);
+                const imgWidth = canvas.width * scale;
+                const imgHeight = canvas.height * scale;
 
-              // Add image to sheet
-              screenshotSheet.addImage(imageId, {
-                tl: { col: 0, row: 0 },
-                ext: { width: imgWidth, height: imgHeight }
-              });
+                // Add image to sheet
+                screenshotSheet.addImage(imageId, {
+                  tl: { col: 0, row: 0 },
+                  ext: { width: imgWidth, height: imgHeight }
+                });
 
-              // Add note
-              screenshotSheet.getCell('A1').value = '';
+                // Add title
+                screenshotSheet.getCell('A1').value = '';
+              }
             } catch (screenshotError) {
               console.warn('Could not capture screenshot:', screenshotError);
             }
@@ -1490,8 +1628,9 @@
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          // Use experiment name for filename
-          const safeFilename = experimentName.replace(/[^a-z0-9]/gi, '_');
+          // Use experiment name + "Cell counts" for filename
+          const filename = getExportFilename();
+          const safeFilename = filename.replace(/[^a-z0-9 ]/gi, '_');
           a.download = `${safeFilename}.xlsx`;
           a.click();
           URL.revokeObjectURL(url);
@@ -1546,7 +1685,8 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const safeFilename = experimentName.replace(/[^a-z0-9]/gi, '_');
+        const filename = getExportFilename();
+        const safeFilename = filename.replace(/[^a-z0-9 ]/gi, '_');
         a.download = `${safeFilename}.csv`;
         a.click();
         URL.revokeObjectURL(url);
@@ -1584,7 +1724,7 @@
         loadState();
         
         // Event listeners
-        ['measurementMode', 'purposeMode', 'mode', 'wellMode'].forEach(id => {
+        ['measurementMode', 'purposeMode', 'mode', 'wellMode', 'countingMode', 'calcBasedOn'].forEach(id => {
           $(id)?.addEventListener('change', () => {
             updateVisibility();
             recalc();
@@ -1670,13 +1810,17 @@
           localStorage.removeItem(STORAGE_KEY);
           location.reload();
         });
-        
+
+        // Update filename preview when experiment name changes
+        $('experimentName')?.addEventListener('input', updateFilenamePreview);
+
         // Initial setup
         updateVisibility();
         setDefaultVolume();
         updatePlateConstraints();
         updateFreezingFieldLocking();
         updateExperimentNameDate();
+        updateFilenamePreview();
         recalc();
 
         // Update experiment name date at midnight (check every minute)
